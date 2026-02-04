@@ -41,20 +41,25 @@ const processDescription = (text: string) => {
  * Tries to fetch data using a robust chain of proxies to bypass CORS in production.
  */
 const fetchWithFallback = async (targetUrl: string, options: RequestInit) => {
-  // Estratégia 1: AllOrigins (Geralmente o mais estável para JSON em produção)
+  // Estratégia 1: AllOrigins RAW (Ignora o wrapper JSON e retorna o dado puro)
   try {
-    const allOriginsUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
-    const response = await fetch(allOriginsUrl);
-    if (response.ok) {
-      const wrapper = await response.json();
-      // AllOrigins retorna o conteúdo original como uma string em .contents
-      return JSON.parse(wrapper.contents);
-    }
+    const rawProxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+    const response = await fetch(rawProxyUrl);
+    if (response.ok) return await response.json();
   } catch (e) {
-    console.warn("AllOrigins falhou, tentando próximo proxy...");
+    console.warn("AllOrigins RAW falhou, tentando CodeTabs...");
   }
 
-  // Estratégia 2: CorsProxy.io
+  // Estratégia 2: CodeTabs Proxy (Simples e eficiente para APIs JSON)
+  try {
+    const codeTabsUrl = `https://api.codetabs.com/v1/proxy?url=${encodeURIComponent(targetUrl)}`;
+    const response = await fetch(codeTabsUrl);
+    if (response.ok) return await response.json();
+  } catch (e) {
+    console.warn("CodeTabs falhou, tentando CorsProxy.io...");
+  }
+
+  // Estratégia 3: CorsProxy.io
   try {
     const response = await fetch(`https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, options);
     if (response.ok) return await response.json();
@@ -62,15 +67,15 @@ const fetchWithFallback = async (targetUrl: string, options: RequestInit) => {
     console.warn("CorsProxy.io falhou...");
   }
 
-  // Estratégia 3: Tentativa Direta (Pode funcionar se o usuário tiver plugins ou o servidor permitir)
+  // Estratégia Final: Tentativa Direta
   try {
     const response = await fetch(targetUrl, options);
     if (response.ok) return await response.json();
   } catch (e) {
-    console.error("Todas as tentativas de conexão (Proxies e Direta) falharam.");
+    console.error("Todas as tentativas de conexão falharam.");
   }
 
-  throw new Error("Erro de conexão: O servidor da Selecty bloqueou a requisição (CORS). Tente recarregar em alguns instantes.");
+  throw new Error("Erro de conexão: Não foi possível contornar o bloqueio de segurança do navegador (CORS).");
 };
 
 export const fetchJobs = async (): Promise<SelectyJobResponse[]> => {
@@ -80,9 +85,10 @@ export const fetchJobs = async (): Promise<SelectyJobResponse[]> => {
     let currentPage = 1;
     let shouldFetch = true;
     
-    // Loop "Fetch Until Empty" - Garante capturar todas as vagas sem depender de metadados
+    // Loop de busca garantindo que pegamos as 25+ vagas
     while (shouldFetch) {
         const timestamp = new Date().getTime();
+        // Aumentamos para 100 para pegar tudo em uma única chamada se possível
         const url = `${API_BASE_URL}/jobfeed/index?portal=${portalName}&per_page=100&page=${currentPage}&_t=${timestamp}`;
         
         console.log(`Buscando página ${currentPage} de vagas...`);
@@ -96,7 +102,7 @@ export const fetchJobs = async (): Promise<SelectyJobResponse[]> => {
         });
 
         let pageData: any[] = [];
-        if (jsonData && Array.isArray(jsonData.data)) {
+        if (jsonData && jsonData.data && Array.isArray(jsonData.data)) {
             pageData = jsonData.data;
         } else if (Array.isArray(jsonData)) {
             pageData = jsonData;
@@ -104,7 +110,7 @@ export const fetchJobs = async (): Promise<SelectyJobResponse[]> => {
 
         if (pageData && pageData.length > 0) {
             allRawJobs = [...allRawJobs, ...pageData];
-            // Se recebemos menos que o limite (100), significa que é a última página
+            // Se o número de vagas na página for menor que o solicitado (100), é a última página
             if (pageData.length < 100) {
                 shouldFetch = false;
             } else {
@@ -114,11 +120,8 @@ export const fetchJobs = async (): Promise<SelectyJobResponse[]> => {
             shouldFetch = false;
         }
 
-        // Limite de segurança para evitar loops infinitos em caso de erro na API
-        if (currentPage > 20) shouldFetch = false;
+        if (currentPage > 10) shouldFetch = false; // Trava de segurança
     } 
-
-    console.log(`Sucesso! ${allRawJobs.length} vagas encontradas no total.`);
 
     const mappedJobs = allRawJobs.map((item: any) => {
       if (!item) return null;
@@ -145,17 +148,15 @@ export const fetchJobs = async (): Promise<SelectyJobResponse[]> => {
       const summaryText = stripHtml(item.description || ''); 
       let title = item.title || 'Vaga sem título';
       title = title.replace(/^Vaga para\s+/i, '');
-      const id = item.id || Math.random().toString(36).substr(2, 9);
-      const department = item.actingArea || item.occupation || 'Geral';
 
       return {
-        id: id,
+        id: item.id || Math.random().toString(36).substr(2, 9),
         title: title,
         description: fullDesc,
         summary: summaryText,
         city: city,
         state: state,
-        department: department,
+        department: item.actingArea || item.occupation || 'Geral',
         contract_type: contractType,
         published_at: item.publicationDate || item.created_at,
         url_apply: item.subscriptionUrl || item.url,
@@ -163,6 +164,7 @@ export const fetchJobs = async (): Promise<SelectyJobResponse[]> => {
       };
     }).filter(item => item !== null) as SelectyJobResponse[];
     
+    // Ordena por data (mais recentes primeiro)
     return mappedJobs.sort((a, b) => {
         const dateA = new Date(a.published_at || 0).getTime();
         const dateB = new Date(b.published_at || 0).getTime();
@@ -170,7 +172,7 @@ export const fetchJobs = async (): Promise<SelectyJobResponse[]> => {
     });
 
   } catch (error: any) {
-    console.error("Erro fatal no serviço de vagas:", error);
+    console.error("Erro na busca de vagas:", error);
     throw error; 
   }
 };
