@@ -1,0 +1,9 @@
+
+{
+  "rewrites": [
+    {
+      "source": "/api-selecty/:path*",
+      "destination": "https://api.selecty.app/v2/:path*"
+    }
+  ]
+}
