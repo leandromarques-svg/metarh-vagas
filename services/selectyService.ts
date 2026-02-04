@@ -2,9 +2,6 @@
 import { SelectyJobResponse } from '../types';
 import { SELECTY_API_TOKEN, API_BASE_URL } from '../constants';
 
-/**
- * Helper to strip HTML tags for summary generation
- */
 const stripHtml = (html: string) => {
   if (!html) return '';
   try {
@@ -14,9 +11,6 @@ const stripHtml = (html: string) => {
   }
 };
 
-/**
- * Helper to convert plain text to HTML with smarter formatting
- */
 const formatPlainTextToHtml = (text: string) => {
   if (!text) return '';
   let formatted = text;
@@ -25,9 +19,6 @@ const formatPlainTextToHtml = (text: string) => {
   return formatted;
 };
 
-/**
- * Process description to ensure line breaks are respected
- */
 const processDescription = (text: string) => {
     if (!text) return '';
     const hasBlockTags = /<\s*(p|div|br|ul|ol|li|h[1-6])\b[^>]*>/i.test(text);
@@ -38,95 +29,78 @@ const processDescription = (text: string) => {
 };
 
 /**
- * Tries to fetch data using a robust chain of proxies to bypass CORS in production.
+ * Função de Fetch ultra-resiliente para produção (Vercel/Cloudflare/etc)
  */
-const fetchWithFallback = async (targetUrl: string, options: RequestInit) => {
-  // Estratégia 1: AllOrigins RAW (Ignora o wrapper JSON e retorna o dado puro)
+const fetchWithRetry = async (targetUrl: string, token: string) => {
+  const headers = {
+    'Accept': 'application/json',
+    'X-Api-Key': token,
+  };
+
+  // TENTATIVA 1: CorsProxy.io (Excelente para manter cabeçalhos customizados)
   try {
-    const rawProxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
-    const response = await fetch(rawProxyUrl);
+    console.log("Tentando conexão via Proxy 1 (CorsProxy)...");
+    const response = await fetch(`https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, {
+      method: 'GET',
+      headers: headers
+    });
     if (response.ok) return await response.json();
+    console.warn(`Proxy 1 falhou com status: ${response.status}`);
   } catch (e) {
-    console.warn("AllOrigins RAW falhou, tentando CodeTabs...");
+    console.warn("Proxy 1 (CorsProxy) falhou.");
   }
 
-  // Estratégia 2: CodeTabs Proxy (Simples e eficiente para APIs JSON)
+  // TENTATIVA 2: AllOrigins (Modo Wrapper - Mais lento, mas muito estável)
   try {
-    const codeTabsUrl = `https://api.codetabs.com/v1/proxy?url=${encodeURIComponent(targetUrl)}`;
-    const response = await fetch(codeTabsUrl);
-    if (response.ok) return await response.json();
+    console.log("Tentando conexão via Proxy 2 (AllOrigins Wrapper)...");
+    const allOriginsUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}&timestamp=${Date.now()}`;
+    const response = await fetch(allOriginsUrl);
+    if (response.ok) {
+      const wrapper = await response.json();
+      // O AllOrigins retorna o JSON como string dentro de 'contents'
+      return JSON.parse(wrapper.contents);
+    }
   } catch (e) {
-    console.warn("CodeTabs falhou, tentando CorsProxy.io...");
+    console.warn("Proxy 2 (AllOrigins) falhou.");
   }
 
-  // Estratégia 3: CorsProxy.io
+  // TENTATIVA 3: Direta (Alguns ambientes de deploy permitem se a API tiver CORS liberado)
   try {
-    const response = await fetch(`https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, options);
+    console.log("Tentando conexão direta...");
+    const response = await fetch(targetUrl, { method: 'GET', headers: headers });
     if (response.ok) return await response.json();
   } catch (e) {
-    console.warn("CorsProxy.io falhou...");
+    console.error("Conexão direta bloqueada pelo navegador (CORS).");
   }
 
-  // Estratégia Final: Tentativa Direta
-  try {
-    const response = await fetch(targetUrl, options);
-    if (response.ok) return await response.json();
-  } catch (e) {
-    console.error("Todas as tentativas de conexão falharam.");
-  }
-
-  throw new Error("Erro de conexão: Não foi possível contornar o bloqueio de segurança do navegador (CORS).");
+  throw new Error("Não foi possível conectar à API de vagas. Por favor, verifique sua conexão ou tente novamente mais tarde.");
 };
 
 export const fetchJobs = async (): Promise<SelectyJobResponse[]> => {
   try {
     const portalName = 'metarh'; 
     let allRawJobs: any[] = [];
-    let currentPage = 1;
-    let shouldFetch = true;
     
-    // Loop de busca garantindo que pegamos as 25+ vagas
-    while (shouldFetch) {
-        const timestamp = new Date().getTime();
-        // Aumentamos para 100 para pegar tudo em uma única chamada se possível
-        const url = `${API_BASE_URL}/jobfeed/index?portal=${portalName}&per_page=100&page=${currentPage}&_t=${timestamp}`;
-        
-        console.log(`Buscando página ${currentPage} de vagas...`);
+    // Para simplificar e evitar erros de loop no Vercel, buscamos as primeiras 100 vagas de uma vez
+    // Já que você tem 25, isso garantirá que todas venham na primeira chamada.
+    const url = `${API_BASE_URL}/jobfeed/index?portal=${portalName}&per_page=100&page=1&_cache=${Date.now()}`;
+    
+    const jsonData = await fetchWithRetry(url, SELECTY_API_TOKEN);
 
-        const jsonData = await fetchWithFallback(url, {
-            method: 'GET',
-            headers: {
-                'Accept': 'application/json',
-                'X-Api-Key': SELECTY_API_TOKEN,
-            }
-        });
+    if (jsonData && jsonData.data && Array.isArray(jsonData.data)) {
+        allRawJobs = jsonData.data;
+    } else if (Array.isArray(jsonData)) {
+        allRawJobs = jsonData;
+    }
 
-        let pageData: any[] = [];
-        if (jsonData && jsonData.data && Array.isArray(jsonData.data)) {
-            pageData = jsonData.data;
-        } else if (Array.isArray(jsonData)) {
-            pageData = jsonData;
-        }
-
-        if (pageData && pageData.length > 0) {
-            allRawJobs = [...allRawJobs, ...pageData];
-            // Se o número de vagas na página for menor que o solicitado (100), é a última página
-            if (pageData.length < 100) {
-                shouldFetch = false;
-            } else {
-                currentPage++;
-            }
-        } else {
-            shouldFetch = false;
-        }
-
-        if (currentPage > 10) shouldFetch = false; // Trava de segurança
-    } 
+    if (allRawJobs.length === 0) {
+        console.warn("API retornou sucesso, mas a lista de vagas está vazia.");
+    }
 
     const mappedJobs = allRawJobs.map((item: any) => {
       if (!item) return null;
       
-      let city = '';
+      let city = 'Não informado';
       let state = '';
       if (item.location) {
         const parts = item.location.split('-').map((s: string) => s.trim());
@@ -140,18 +114,13 @@ export const fetchJobs = async (): Promise<SelectyJobResponse[]> => {
       let fullDesc = processDescription(item.description || '');
       
       if (item.requirements) fullDesc += `<br><br><h3><strong>Requisitos</strong></h3>${formatPlainTextToHtml(item.requirements)}`;
-      if (item.education) fullDesc += `<br><br><h3><strong>Escolaridade</strong></h3>${formatPlainTextToHtml(item.education)}`;
-      if (item.qualification) fullDesc += `<br><br><h3><strong>Qualificações</strong></h3>${formatPlainTextToHtml(item.qualification)}`;
       if (item.benefits) fullDesc += `<br><br><h3><strong>Benefícios</strong></h3>${formatPlainTextToHtml(item.benefits)}`;
-      if (item.workSchedule) fullDesc += `<br><br><h3><strong>Horário de Trabalho</strong></h3>${formatPlainTextToHtml(item.workSchedule)}`;
 
-      const summaryText = stripHtml(item.description || ''); 
-      let title = item.title || 'Vaga sem título';
-      title = title.replace(/^Vaga para\s+/i, '');
+      const summaryText = stripHtml(item.description || '').substring(0, 180) + '...'; 
 
       return {
         id: item.id || Math.random().toString(36).substr(2, 9),
-        title: title,
+        title: (item.title || 'Vaga de Emprego').replace(/^Vaga para\s+/i, ''),
         description: fullDesc,
         summary: summaryText,
         city: city,
@@ -164,7 +133,6 @@ export const fetchJobs = async (): Promise<SelectyJobResponse[]> => {
       };
     }).filter(item => item !== null) as SelectyJobResponse[];
     
-    // Ordena por data (mais recentes primeiro)
     return mappedJobs.sort((a, b) => {
         const dateA = new Date(a.published_at || 0).getTime();
         const dateB = new Date(b.published_at || 0).getTime();
@@ -172,7 +140,7 @@ export const fetchJobs = async (): Promise<SelectyJobResponse[]> => {
     });
 
   } catch (error: any) {
-    console.error("Erro na busca de vagas:", error);
+    console.error("Erro crítico ao buscar vagas:", error);
     throw error; 
   }
 };
