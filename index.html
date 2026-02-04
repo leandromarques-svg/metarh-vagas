@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MetaRH - Trabalhe Conosco</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Barlow', 'sans-serif'],
+            },
+            colors: {
+              brand: {
+                50: '#fbf5ff',
+                100: '#f5e6ff',
+                200: '#ebccff',
+                300: '#dbb3ff',
+                400: '#aa3ffe',
+                500: '#aa3ffe', 
+                600: '#aa3ffe', 
+                700: '#c529ff',
+                800: '#8a2be2',
+                900: '#4c0080',
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      /* Resets para evitar scroll duplo em iframes/embeds */
+      html, body {
+        margin: 0;
+        padding: 0;
+        /* IMPORTANTE: height auto permite que o conteúdo dite a altura, evitando barra de rolagem interna */
+        height: auto;
+        min-height: 0;
+        width: 100%;
+        overflow-x: hidden;
+        /* Overflow visible ou auto permite integração melhor com a página pai */
+        overflow-y: auto; 
+      }
+      #root {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/client": "https://aistudiocdn.com/react-dom@^19.2.0/client",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-transparent antialiased">
+    <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
