@@ -29,64 +29,69 @@ const processDescription = (text: string) => {
 };
 
 /**
- * Função de Fetch ultra-resiliente para produção (Vercel/Cloudflare/etc)
+ * Função de Fetch ultra-resiliente focada em contornar CORS no Vercel
  */
 const fetchWithRetry = async (targetUrl: string, token: string) => {
-  const headers = {
-    'Accept': 'application/json',
-    'X-Api-Key': token,
-  };
-
-  // TENTATIVA 1: CorsProxy.io (Excelente para manter cabeçalhos customizados)
+  // 1. TENTATIVA COM ALLORIGINS (MODO WRAPPER) - O mais seguro para CORS
+  // Este método não envia cabeçalhos customizados diretamente para o proxy, 
+  // evitando o erro de "preflight" (OPTIONS) que vimos nos logs.
   try {
-    console.log("Tentando conexão via Proxy 1 (CorsProxy)...");
-    const response = await fetch(`https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, {
-      method: 'GET',
-      headers: headers
-    });
-    if (response.ok) return await response.json();
-    console.warn(`Proxy 1 falhou com status: ${response.status}`);
-  } catch (e) {
-    console.warn("Proxy 1 (CorsProxy) falhou.");
-  }
-
-  // TENTATIVA 2: AllOrigins (Modo Wrapper - Mais lento, mas muito estável)
-  try {
-    console.log("Tentando conexão via Proxy 2 (AllOrigins Wrapper)...");
-    const allOriginsUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}&timestamp=${Date.now()}`;
-    const response = await fetch(allOriginsUrl);
+    console.log("Tentando conexão via Proxy Seguro (AllOrigins Wrapper)...");
+    
+    // Tentamos passar o token na URL também, caso o proxy não suporte headers
+    const urlWithToken = `${targetUrl}&api_key=${encodeURIComponent(token)}`;
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(urlWithToken)}&_t=${Date.now()}`;
+    
+    const response = await fetch(proxyUrl);
+    
     if (response.ok) {
       const wrapper = await response.json();
-      // O AllOrigins retorna o JSON como string dentro de 'contents'
-      return JSON.parse(wrapper.contents);
+      if (wrapper && wrapper.contents) {
+        // AllOrigins retorna o corpo da resposta original em 'contents' como string
+        const data = JSON.parse(wrapper.contents);
+        console.log("Conexão bem sucedida via AllOrigins!");
+        return data;
+      }
     }
   } catch (e) {
-    console.warn("Proxy 2 (AllOrigins) falhou.");
+    console.warn("Proxy AllOrigins falhou ou retornou dados inválidos.");
   }
 
-  // TENTATIVA 3: Direta (Alguns ambientes de deploy permitem se a API tiver CORS liberado)
+  // 2. TENTATIVA COM CODETABS (Fallback estável)
   try {
-    console.log("Tentando conexão direta...");
-    const response = await fetch(targetUrl, { method: 'GET', headers: headers });
+    console.log("Tentando conexão via Proxy Alternativo (CodeTabs)...");
+    const codeTabsUrl = `https://api.codetabs.com/v1/proxy?url=${encodeURIComponent(targetUrl)}`;
+    const response = await fetch(codeTabsUrl, {
+      headers: { 'X-Api-Key': token }
+    });
     if (response.ok) return await response.json();
   } catch (e) {
-    console.error("Conexão direta bloqueada pelo navegador (CORS).");
+    console.warn("Proxy CodeTabs falhou.");
   }
 
-  throw new Error("Não foi possível conectar à API de vagas. Por favor, verifique sua conexão ou tente novamente mais tarde.");
+  // 3. TENTATIVA COM CORSPROXY.IO (Último recurso)
+  try {
+    console.log("Tentando conexão via Proxy 3 (CorsProxy)...");
+    const response = await fetch(`https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, {
+      method: 'GET',
+      headers: { 'X-Api-Key': token }
+    });
+    if (response.ok) return await response.json();
+  } catch (e) {
+    console.warn("Proxy 3 falhou.");
+  }
+
+  throw new Error("Não foi possível estabelecer uma conexão segura com o servidor de vagas (Erro de CORS).");
 };
 
 export const fetchJobs = async (): Promise<SelectyJobResponse[]> => {
   try {
     const portalName = 'metarh'; 
-    let allRawJobs: any[] = [];
-    
-    // Para simplificar e evitar erros de loop no Vercel, buscamos as primeiras 100 vagas de uma vez
-    // Já que você tem 25, isso garantirá que todas venham na primeira chamada.
-    const url = `${API_BASE_URL}/jobfeed/index?portal=${portalName}&per_page=100&page=1&_cache=${Date.now()}`;
+    const url = `${API_BASE_URL}/jobfeed/index?portal=${portalName}&per_page=100&page=1`;
     
     const jsonData = await fetchWithRetry(url, SELECTY_API_TOKEN);
 
+    let allRawJobs: any[] = [];
     if (jsonData && jsonData.data && Array.isArray(jsonData.data)) {
         allRawJobs = jsonData.data;
     } else if (Array.isArray(jsonData)) {
@@ -94,7 +99,8 @@ export const fetchJobs = async (): Promise<SelectyJobResponse[]> => {
     }
 
     if (allRawJobs.length === 0) {
-        console.warn("API retornou sucesso, mas a lista de vagas está vazia.");
+        console.warn("Nenhuma vaga encontrada na resposta da API.");
+        return [];
     }
 
     const mappedJobs = allRawJobs.map((item: any) => {
@@ -112,11 +118,10 @@ export const fetchJobs = async (): Promise<SelectyJobResponse[]> => {
       contractType = contractType.replace(/['"]+/g, '');
 
       let fullDesc = processDescription(item.description || '');
-      
       if (item.requirements) fullDesc += `<br><br><h3><strong>Requisitos</strong></h3>${formatPlainTextToHtml(item.requirements)}`;
       if (item.benefits) fullDesc += `<br><br><h3><strong>Benefícios</strong></h3>${formatPlainTextToHtml(item.benefits)}`;
 
-      const summaryText = stripHtml(item.description || '').substring(0, 180) + '...'; 
+      const summaryText = stripHtml(item.description || '').substring(0, 160) + '...'; 
 
       return {
         id: item.id || Math.random().toString(36).substr(2, 9),
@@ -140,7 +145,7 @@ export const fetchJobs = async (): Promise<SelectyJobResponse[]> => {
     });
 
   } catch (error: any) {
-    console.error("Erro crítico ao buscar vagas:", error);
+    console.error("Erro crítico na extração de vagas:", error);
     throw error; 
   }
 };
